@@ -1,3 +1,4 @@
-const shared = {}
+export const isObject = value => typeof value === 'object' && value !== null
 
-export { shared }
+// 合并
+export const extend = Object.assign
