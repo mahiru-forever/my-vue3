@@ -9,13 +9,20 @@
 </head>
 
 <body>
+  <div id="app"></div>
   <script src="../node_modules/@vue/reactivity/dist/reactivity.global.js"></script>
   <script>
-    const { reactive, shallowReactive, readonly, shallowReadonly } = VueReactivity
+    const { reactive, shallowReactive, readonly, shallowReadonly, effect } = VueReactivity
 
-    const state = reactive({ name: 'xxx', birthday: { y: 2022 } })
+    // 响应式数据
+    const state = reactive({ name: 'xxx', birthday: { y: 2022 }, other: 'xxx', age: 20 })
     state.birthday.y = 222
-    console.log(state.birthday)
+    // console.log(state.birthday)
+
+    // effect
+    effect(() => {
+      document.querySelector('#app').innerHTML = `姓名：${state.name}；年龄:${state.age}`
+    })
 
   </script>
 </body>
