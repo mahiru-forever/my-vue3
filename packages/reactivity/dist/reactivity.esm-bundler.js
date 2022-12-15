@@ -18,6 +18,9 @@ var TriggerOrTypes;
 })(TriggerOrTypes || (TriggerOrTypes = {}));
 
 // 将effect变成响应式的effect函数，需要数据变化时重新执行
+// 1.effect中的属性都会收集effect
+// 2.当这个属性发生变化，会重新执行effect
+// 3.effect默认立即执行
 function effect(fn, options = {}) {
     const effect = createReactiveEffect(fn, options);
     // effect 默认会先执行一次
@@ -226,5 +229,73 @@ function createReactiveObject(target, isReadonly, baseHandlers) {
     return proxy;
 }
 
-export { effect, reactive, readonly, shallowReactive, shallowReadonly };
+// ref 和 reactive 区别
+// ref 用的是 defineProperty
+// reactive 用的是 Proxy
+function ref(value) {
+    // 将普通类型变成一个对象（不是普通类型也可以）
+    return createRef(value);
+}
+function shallowRef(value) {
+    return createRef(value, true);
+}
+const convert = val => (isObject(val) ? reactive(val) : val);
+class RefImpl {
+    rawValue /* 这种写法会自动声明+赋值 */;
+    shallow /* 这种写法会自动声明+赋值 */;
+    _value;
+    __v_isRef = true; // ref属性标识
+    constructor(rawValue /* 这种写法会自动声明+赋值 */, shallow /* 这种写法会自动声明+赋值 */) {
+        this.rawValue = rawValue;
+        this.shallow = shallow;
+        // shallow 为 true，直接代理最外层
+        // shallow 为 false，如果是object就通过reactive处理，否则同true的情况
+        this._value = shallow ? rawValue : convert(rawValue);
+    }
+    // 属性访问器（即defineProperty）
+    get value() {
+        track(this, TrackOpTypes.GET, 'value');
+        return this._value;
+    }
+    set value(newValue) {
+        if (hasChanged(this.rawValue, newValue)) {
+            this.rawValue = newValue;
+            this._value = newValue;
+            trigger(this, TriggerOrTypes.SET, 'value', newValue);
+        }
+    }
+}
+function createRef(rawValue, shallow = false) {
+    return new RefImpl(rawValue, shallow);
+}
+class ObjectRefImpl {
+    target;
+    key;
+    __v_isRef = true; // ref属性标识
+    constructor(target, key) {
+        this.target = target;
+        this.key = key;
+    }
+    get value() {
+        return this.target[this.key];
+    }
+    set value(newValue) {
+        this.target[this.key] = newValue;
+    }
+}
+// toRef 不进行响应式依赖收集，是不是响应式依赖传入的target
+// 将一个对象中的属性变成ref
+function toRef(target, key) {
+    return new ObjectRefImpl(target, key);
+}
+// 将对象/数组里所有属性包装成ref
+function toRefs(target) {
+    const ret = isArray(target) ? new Array(target.length) : {};
+    for (const key in target) {
+        ret[key] = toRef(target, key);
+    }
+    return ret;
+}
+
+export { effect, reactive, readonly, ref, shallowReactive, shallowReadonly, shallowRef, toRef, toRefs };
 //# sourceMappingURL=reactivity.esm-bundler.js.map

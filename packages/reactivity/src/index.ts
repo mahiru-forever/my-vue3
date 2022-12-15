@@ -6,3 +6,5 @@ export {
 } from './reactive.js'
 
 export { effect } from './effect'
+
+export { ref, shallowRef, toRef, toRefs } from './ref'

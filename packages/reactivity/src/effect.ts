@@ -6,6 +6,9 @@ interface IEffectOptions {
 }
 
 // 将effect变成响应式的effect函数，需要数据变化时重新执行
+// 1.effect中的属性都会收集effect
+// 2.当这个属性发生变化，会重新执行effect
+// 3.effect默认立即执行
 export function effect(fn, options: IEffectOptions = {}) {
   const effect = createReactiveEffect(fn, options)
 
