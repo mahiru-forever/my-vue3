@@ -10,6 +10,6 @@ async function build(target) {
   })
 }
 
-const target = 'reactivity'
+const target = 'runtime-dom'
 
 build(target)

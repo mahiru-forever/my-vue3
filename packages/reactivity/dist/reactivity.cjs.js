@@ -2,6 +2,7 @@
 
 const isObject = value => typeof value === 'object' && value !== null;
 const isArray = Array.isArray;
+const isFunction = value => typeof value === 'function';
 const isIntegerKey = key => parseInt(key) + '' === key;
 let hasOwnProperty = Object.prototype.hasOwnProperty;
 const hasOwn = (target, key) => hasOwnProperty.call(target, key);
@@ -119,7 +120,14 @@ function trigger(target, type, key, value, oldValue) {
                 break;
         }
     }
-    effects.forEach(effect => effect());
+    effects.forEach((effect) => {
+        if (effect.options.scheduler) {
+            effect.options.scheduler(effect);
+        }
+        else {
+            effect();
+        }
+    });
 }
 
 const get = createGetter();
@@ -299,6 +307,59 @@ function toRefs(target) {
     return ret;
 }
 
+// computed => effect({ lazy }) + scheduler + 缓存
+// vue2 和 vue3 computed原理不一样
+// vue2 =》 让computed依赖的属性记住渲染的watcher
+class ComputedRefImpl {
+    setter;
+    _dirty = true;
+    _value;
+    effect;
+    constructor(getter, setter) {
+        this.setter = setter;
+        // 计算属性会产生一个effect
+        this.effect = effect(getter, {
+            lazy: true,
+            scheduler: () => {
+                if (!this._dirty) {
+                    this._dirty = true;
+                    // 触发收集当前计算属性的effect执行
+                    trigger(this, TriggerOrTypes.SET, 'value');
+                }
+            }
+        });
+    }
+    // 计算属性也要收集依赖（vue2计算属性不具备收集依赖能力）
+    get value() {
+        if (this._dirty) {
+            this._value = this.effect();
+            this._dirty = false;
+        }
+        // 收集计算属性的value （计算属性也有可能被effect收集）
+        track(this, TrackOpTypes.GET, 'value');
+        return this._value;
+    }
+    set value(newValue) {
+        this.setter(newValue);
+    }
+}
+function computed(getterOrOptions) {
+    let getter;
+    let setter;
+    if (isFunction(getterOrOptions)) {
+        getter = getterOrOptions;
+        setter = () => {
+            console.warn('computed value must be readonly');
+        };
+    }
+    else {
+        getter = getterOrOptions.get;
+        setter = getterOrOptions.set;
+    }
+    return new ComputedRefImpl(getter, setter);
+}
+
+exports.computed = computed;
 exports.effect = effect;
 exports.reactive = reactive;
 exports.readonly = readonly;

@@ -3,6 +3,7 @@ import { isArray, isIntegerKey } from '@vue/shared/src'
 
 interface IEffectOptions {
   lazy?: boolean
+  scheduler?: (effect?: any) => void
 }
 
 // 将effect变成响应式的effect函数，需要数据变化时重新执行
@@ -80,7 +81,7 @@ export function trigger(
   target,
   type: TriggerOrTypes,
   key: string,
-  value,
+  value?,
   oldValue?
 ) {
   const depsMap = targetMap.get(target)
@@ -102,6 +103,8 @@ export function trigger(
   if (key === 'length' && isArray(target)) {
     // 长度有依赖收集
     depsMap.forEach((dep, key) => {
+      // key === 'length' 数组长度
+      // key > value   例如：收集依赖的数组索引为2，但是设置arr.length = 1，那么这个索引为2的也要触发更新
       if (key === 'length' || key > value) {
         // 如果更改的是length属性 or 当前的长度小于收集的索引，那么这个索引也要触发effect重新执行
         // 即改了长度，不光长度要更新，对应的索引也要更新
@@ -126,5 +129,11 @@ export function trigger(
     }
   }
 
-  effects.forEach(effect => effect())
+  effects.forEach((effect: any) => {
+    if (effect.options.scheduler) {
+      effect.options.scheduler(effect)
+    } else {
+      effect()
+    }
+  })
 }

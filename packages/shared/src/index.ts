@@ -12,3 +12,5 @@ export const hasChanged = (oldValue, value) => oldValue !== value
 
 // 合并
 export const extend = Object.assign
+
+export * from './shapeFlag'

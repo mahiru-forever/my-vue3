@@ -12,7 +12,7 @@
   <div id="app"></div>
   <script src="../node_modules/@vue/reactivity/dist/reactivity.global.js"></script>
   <script>
-    const { reactive, shallowReactive, readonly, shallowReadonly, effect, ref, toRef } = VueReactivity
+    const { reactive, shallowReactive, readonly, shallowReadonly, effect, ref, toRef, computed } = VueReactivity
 
     // // 响应式数据
     // const state = reactive({ name: 'xxx', birthday: { y: 2022 }, other: 'xxx', age: 20 })
@@ -25,9 +25,23 @@
     // })
 
     const state = ref('hhh')
-    console.log(state);
+    // console.log(state);
+    // const objRef = toRef({ name: 'xxxx' }, 'name')
 
-    const objRef = toRef({ name: 'xxxx' }, 'name')
+    computedValue = computed(() => {
+      console.log('state.value', state.value)
+      return state.value + 'HHH'
+    })
+    console.log(computedValue.value, 11)
+    console.log(computedValue.value, 22)
+    state.value = 'hahaha'
+    console.log(computedValue.value, 33)
+    console.log(computedValue.value, 44)
+    effect(() => {
+      console.log(computedValue.value);
+    })
+    state.value = 'HAHAHA'
+
 
   </script>
 </body>
