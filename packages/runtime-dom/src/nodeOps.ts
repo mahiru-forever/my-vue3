@@ -20,6 +20,8 @@ export const nodeOps = {
   querySelector: selector => document.querySelector(selector),
   // 设置文本
   setElementText: (el, text) => (el.textContent = text),
+  // 下一个元素
+  nextSibling: node => node.nextSibling,
 
   /** 文本操作 */
   // 创建文本

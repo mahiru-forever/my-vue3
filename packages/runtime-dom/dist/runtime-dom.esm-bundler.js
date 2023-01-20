@@ -18,6 +18,8 @@ const nodeOps = {
     querySelector: selector => document.querySelector(selector),
     // 设置文本
     setElementText: (el, text) => (el.textContent = text),
+    // 下一个元素
+    nextSibling: node => node.nextSibling,
     /** 文本操作 */
     // 创建文本
     createText: text => document.createTextNode(text),
@@ -694,10 +696,65 @@ function flushJobs() {
     queue.length = 0;
 }
 
+// 1.动态规划 性能不好
+// 2.贪心 + 二分查找 ✅
+// 在查找中如果当前的比最后一个大，直接插入
+// 如果当前这个比最后一个小，采用二分查找，找到已经排好的列表，找到比当前数大的那一项 将其替换掉
+// O(nlogn)
+function getSequence(arr) {
+    const len = arr.length;
+    const result = [0]; // 索引
+    const p = arr.slice(0); // 存放索引
+    let start;
+    let end;
+    for (let i = 0; i < len; i++) {
+        const arrI = arr[i];
+        // 0 是新增
+        if (arrI !== 0) {
+            let resultLastIndex = result[result.length - 1];
+            // 比result里最后一项大，直接放入最后
+            if (arr[resultLastIndex] < arrI) {
+                // 记录当前值的前一个值的索引
+                p[i] = resultLastIndex;
+                result.push(i);
+                continue;
+            }
+            // 二分查找找到比当前值大的
+            start = 0;
+            end = result.length - 1;
+            while (start < end) {
+                const mid = ((start + end) / 2) | 0;
+                if (arrI > arr[result[mid]]) {
+                    start = mid + 1;
+                }
+                else {
+                    end = mid;
+                }
+            }
+            // 如果值小于result中的值，则替换位置
+            if (arrI < arr[result[start]]) {
+                // start 为0 表示是第一个，不用记录前面值的位置
+                if (start > 0) {
+                    p[i] = result[start - 1];
+                }
+                result[start] = i;
+            }
+        }
+    }
+    let resLen = result.length;
+    let last = result[resLen - 1];
+    // 根据前驱节点向前查找
+    while (resLen-- > 0) {
+        result[resLen] = last;
+        last = p[last];
+    }
+    return result;
+}
+
 // 告诉core怎么渲染
 // createRenderer 创建渲染器
 function createRenderer(rendererOptions) {
-    const { insert: hostInsert, remove: hostRemove, patchProp: hostPatchProp, createElement: hostCreateElement, createText: hostCreateText, createComment: hostCreateComment, setText: hostSetText, setElementText: hostSetElementText } = rendererOptions;
+    const { insert: hostInsert, remove: hostRemove, patchProp: hostPatchProp, createElement: hostCreateElement, createText: hostCreateText, createComment: hostCreateComment, setText: hostSetText, setElementText: hostSetElementText, nextSibling: hostNextSibling } = rendererOptions;
     // -------- 处理组件方法 ---------
     const setupRenderEffect = (instance, container) => {
         // 需要创建一个effect，在effect中调用render方法，这样render方法中拿到的数据会收集这个effect，属性更新时会重新执行
@@ -714,7 +771,20 @@ function createRenderer(rendererOptions) {
                 patch(null, subTree, container);
                 instance.isMounted = true;
             }
+            else {
+                // 更新逻辑
+                // 不能每次数据变更就执行，需要降低频率，以最后一次数据变更为准
+                // 通过scheduler自定义更新策略，维护一个队列，进行去重
+                // diff算法（核心 diff + 序列优化 + watchApi + 生命周期）
+                // 上一次生成的树
+                const prevTree = instance.subTree;
+                const proxyToUse = instance.proxy;
+                // 新树
+                const nextTree = instance.render.call(proxyToUse, proxyToUse);
+                patch(prevTree, nextTree, container);
+            }
         }, {
+            // 更新实际走的
             scheduler: queueJob
         });
     };
@@ -747,7 +817,7 @@ function createRenderer(rendererOptions) {
     // 挂载元素
     // children如果是文本直接给容器设置文本
     // 如果是数组里的文本，则需要创建文本节点插入进父容器
-    const mountElement = (vnode, container) => {
+    const mountElement = (vnode, container, anchor = null) => {
         // 递归渲染
         const { props, shapeFlag, type, children } = vnode;
         // 创建真实节点
@@ -767,12 +837,207 @@ function createRenderer(rendererOptions) {
             mountChildren(children, el);
         }
         // 插入页面
-        hostInsert(el, container);
+        hostInsert(el, container, anchor);
     };
-    const processElememt = (n1, n2, container) => {
+    const patchProp = (oldProps, newProps, el) => {
+        if (oldProps === newProps) {
+            return;
+        }
+        // 更新新的属性
+        for (let key in newProps) {
+            const prev = oldProps[key];
+            const next = newProps[key];
+            if (prev !== next) {
+                hostPatchProp(el, key, prev, next);
+            }
+        }
+        // 删除多余的属性
+        for (let key in oldProps) {
+            if (!(key in newProps)) {
+                hostPatchProp(el, key, oldProps, null);
+            }
+        }
+    };
+    const unmountChildren = children => {
+        for (let i = 0; i < children.length; i++) {
+            unmount(children[i]);
+        }
+    };
+    // diff算法
+    const patchKeyedChildren = (c1, c2, el) => {
+        let i = 0;
+        let e1 = c1.length - 1;
+        let e2 = c2.length - 1;
+        // 对特殊情况进行优化 尽可能减少比对的区域
+        // 从头部开始比对，缩小前面的范围
+        while (i <= e1 && i <= e2) {
+            const n1 = c1[i];
+            const n2 = c2[i];
+            if (isSameVNodeType(n1, n2)) {
+                // 继续比对子节点
+                patch(n1, n2, el);
+            }
+            else {
+                break;
+            }
+            i++;
+        }
+        // 从尾部开始比对，缩小后面的范围
+        while (i <= e1 && i <= e2) {
+            const n1 = c1[e1];
+            const n2 = c2[e2];
+            if (isSameVNodeType(n1, n2)) {
+                // 继续比对子节点
+                patch(n1, n2, el);
+            }
+            else {
+                break;
+            }
+            e1--;
+            e2--;
+        }
+        // 特殊情况 有一方已经完全比完了
+        // 同序列挂载 or 同序列移除
+        if (i > e1) {
+            // 有一方已经完全比完了
+            // 旧的少 新的多
+            // 有新增
+            if (i <= e2) {
+                // 判断是向前插入还是向后插入  判断e2的下一个位置有没有
+                const nextPos = e2 + 1;
+                const anchor = nextPos < c2.length ? c2[nextPos].el : null;
+                while (i <= e2) {
+                    patch(null, c2[i], el, anchor);
+                    i++;
+                }
+            }
+        }
+        else if (i > e2) {
+            // 有一方已经完全比完了
+            // 旧的多新的少
+            while (i <= e1) {
+                unmount(c1[i]);
+                i++;
+            }
+        }
+        else {
+            // 乱序比较，需要尽可能复用 新元素做成一个映射表去旧的里找，一样的复用，不一样的新的插入旧的删除
+            let s1 = i;
+            let s2 = i;
+            const keyToNewIndexMap = new Map();
+            // 生成映射表
+            for (let i = s2; i <= e2; i++) {
+                const vnode = c2[i];
+                keyToNewIndexMap.set(vnode.key, i);
+            }
+            const toBePatched = e2 - e1 + 1;
+            const newIndexToOldIndexMap = new Array(toBePatched).fill(0);
+            // 去老的里找有没有复用的
+            for (let i = s1; i <= e1; i++) {
+                const oldVnode = c1[i];
+                const newIndex = keyToNewIndexMap.get(oldVnode.key);
+                if (newIndex === undefined) {
+                    // 老的不在新的中，直接删除
+                    unmount(oldVnode);
+                }
+                else {
+                    // 新的旧的索引关系
+                    // + 1防止出现 0 的情况，因为0是表示需要新增的内容
+                    newIndexToOldIndexMap[newIndex - s2] = i + 1;
+                    // 老的在新的中，进行比对，此处比较完后元素位置有差异
+                    patch(oldVnode, c2[newIndex], el);
+                }
+            }
+            // 获得最长子序列  [5,3,4,0] => [1,2]
+            let increasingNewIndexSequence = getSequence(newIndexToOldIndexMap);
+            let j = increasingNewIndexSequence.length - 1;
+            // 最后移动节点，并且将新增的节点插入
+            // 倒序插入
+            for (let i = toBePatched - 1; i >= 0; i--) {
+                const currentIndex = i + s2; // 节点的索引
+                const child = c2[currentIndex];
+                const anchor = currentIndex + 1 < c2.length ? c2[currentIndex + 1].el : null;
+                if (newIndexToOldIndexMap[i] === 0) {
+                    // 新元素还没有被patch过 新增
+                    patch(null, child, el, anchor);
+                }
+                else {
+                    // 所有的节点都会被移动一遍，需要尽可能减少移动次数
+                    // 使用最长递增子序列优化
+                    if (i !== increasingNewIndexSequence[j]) {
+                        hostInsert(child.el, el, anchor);
+                    }
+                    else {
+                        // 跳过不需要移动的元素
+                        j--;
+                    }
+                }
+            }
+        }
+    };
+    const patchChildren = (n1, n2, el) => {
+        const c1 = n1.children;
+        const c2 = n2.children;
+        // 可能的情况：
+        // 旧的有子节点 新的没有
+        // 新的有子节点 旧的没有
+        // 新旧都有子节点
+        // 新旧都是文本
+        const prevShapeFlag = n1.shapeFlag;
+        const shapeFlag = n2.shapeFlag;
+        // 新节点是个文本
+        if (shapeFlag & 8 /* ShapeFlags.TEXT_CHILDREN */) {
+            // 旧的有n个子节点  但是新的是文本
+            if (prevShapeFlag & 16 /* ShapeFlags.ARRAY_CHILDREN */) {
+                // 如果c1中包含组件会调用组件的销毁方法
+                unmountChildren(c1);
+            }
+            // 两个都是文本
+            if (c2 !== c1) {
+                hostSetElementText(el, c2);
+            }
+        }
+        else {
+            // 现在是元素
+            if (prevShapeFlag & 16 /* ShapeFlags.ARRAY_CHILDREN */) {
+                if (shapeFlag & 16 /* ShapeFlags.ARRAY_CHILDREN */) {
+                    // 当前是数组  之前是数组 =》 diff算法
+                    patchKeyedChildren(c1, c2, el);
+                }
+                else {
+                    // 当前没有子节点
+                    unmountChildren(c1);
+                }
+            }
+            else {
+                if (prevShapeFlag & 8 /* ShapeFlags.TEXT_CHILDREN */) {
+                    // 上一次是文本
+                    hostSetElementText(el, '');
+                }
+                if (shapeFlag & 16 /* ShapeFlags.ARRAY_CHILDREN */) {
+                    // 现在是数组，将新的内容挂载到容器中
+                    mountChildren(c2, el);
+                }
+            }
+        }
+    };
+    const patchElement = (n1, n2, container) => {
+        // 相同节点  复用旧元素
+        const el = (n2.el = n1.el);
+        // 更新属性 更新子节点
+        const oldProps = n1.props || {};
+        const newProps = n2.props || {};
+        patchProp(oldProps, newProps, el);
+        patchChildren(n1, n2, el);
+    };
+    const processElememt = (n1, n2, container, anchor) => {
         if (n1 === null) {
             // 元素挂载（初始化）
-            mountElement(n2, container);
+            mountElement(n2, container, anchor);
+        }
+        else {
+            // 元素更新
+            patchElement(n1, n2);
         }
     };
     // -------- 处理元素方法结束 ---------
@@ -784,9 +1049,25 @@ function createRenderer(rendererOptions) {
         }
     };
     // -------- 处理文本方法结束 ---------
-    const patch = (n1, n2, container) => {
+    const isSameVNodeType = (n1, n2) => {
+        return n1.type === n2.type && n1.key === n2.key;
+    };
+    const unmount = n1 => {
+        // 删除旧元素
+        hostRemove(n1.el);
+        // 如果是组件还需要调用组件的生命周期
+        // ...
+    };
+    const patch = (n1, n2, container, anchor = null) => {
         // 针对不同类型 做初始化操作
         const { shapeFlag, type } = n2;
+        // 不相同元素
+        if (n1 && !isSameVNodeType(n1, n2)) {
+            // 参照物，后续插入元素插入在这个之前
+            anchor = hostNextSibling(n1);
+            // 删掉以前的 换成n2
+            unmount(n1);
+        }
         switch (type) {
             // 处理文本
             case TEXT:
@@ -795,7 +1076,7 @@ function createRenderer(rendererOptions) {
             default:
                 if (shapeFlag & 1 /* ShapeFlags.ELEMENT */) {
                     // 是元素
-                    processElememt(n1, n2, container);
+                    processElememt(n1, n2, container, anchor);
                 }
                 else if (shapeFlag & 4 /* ShapeFlags.STATEFUL_COMPONENT */) {
                     // 是组件
@@ -815,6 +1096,16 @@ function createRenderer(rendererOptions) {
         createApp: createAppApi(render)
     };
 }
+// 将组件 变成vnode -》 再将vnode变成真实的dom -》 插入到页面上
+// render方法的作用可以渲染一个虚拟节点 将他挂载到具体的dom元素上
+// vue3的执行核心 patch方法
+// 组件创造过程
+// 创造一个instance -》 初始化
+// 根据用户传入组件  拿到对应的内容  来填充instance
+// 创建effect 并且调用render方法，数据会将对应的effect收集起来
+// 拿到render方法返回的结果  再次走渲染流程 -》 patch
+// 组件渲染顺序 先父后子
+// 每个组件都是一个effect
 
 // render函数参数的情况，做兼容处理
 // h('div', {})
