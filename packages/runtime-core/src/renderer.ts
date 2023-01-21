@@ -5,6 +5,7 @@ import { effect } from '@vue/reactivity/src'
 import { normalizeVNode, TEXT } from './vnode'
 import { queueJob } from './scheduler'
 import { getSequence } from './utils'
+import { invokeArrayFns } from './apiLifecycle'
 
 // 告诉core怎么渲染
 // createRenderer 创建渲染器
@@ -29,6 +30,12 @@ export function createRenderer(rendererOptions) {
     instance.update = effect(
       function componentEffect() {
         if (!instance.isMounted) {
+          const { bm, m } = instance
+          // beforemounted
+          if (bm) {
+            invokeArrayFns(bm)
+          }
+
           // 没有被挂载，初次渲染
           const proxyToUse = instance.proxy
           // 虚拟节点  渲染内容
@@ -42,11 +49,21 @@ export function createRenderer(rendererOptions) {
           // 用render函数的返回值继续渲染
           patch(null, subTree, container)
           instance.isMounted = true
+
+          // mounted必须子组件完成后才会调用自己
+          if (m) {
+            invokeArrayFns(m)
+          }
         } else {
           // 更新逻辑
           // 不能每次数据变更就执行，需要降低频率，以最后一次数据变更为准
           // 通过scheduler自定义更新策略，维护一个队列，进行去重
           // diff算法（核心 diff + 序列优化 + watchApi + 生命周期）
+          
+          const { bu, u } = instance
+          if (bu) {
+            invokeArrayFns(bu)
+          }
 
           // 上一次生成的树
           const prevTree = instance.subTree
@@ -55,6 +72,10 @@ export function createRenderer(rendererOptions) {
           const nextTree = instance.render.call(proxyToUse, proxyToUse)
 
           patch(prevTree, nextTree, container)
+
+          if (u) {
+            invokeArrayFns(u)
+          }
         }
       },
       {
@@ -435,3 +456,12 @@ export function createRenderer(rendererOptions) {
 // 组件渲染顺序 先父后子
 
 // 每个组件都是一个effect
+
+// ——————————————————————————————
+// 组件更新流程
+// 父传子属性，子是否要更新？ 更新一次   内部会把子组件自身的更新移除掉
+// 子组件使用了属性，属性变化要不要更新？ 更新一次
+// 流程：
+// 父组件先更新状态 -> 产生一个新的虚拟节点 -> 走diff流程
+// 如果遇到的是组件，属性是动态的，会比较两个组件，如果属性不一样要更新组件
+// 组件需要更新自己身上的属性，并且重新生产子树

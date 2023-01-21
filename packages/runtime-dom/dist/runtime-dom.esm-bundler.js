@@ -261,6 +261,10 @@ function setupComponent(instance) {
         setupStatefulComponent(instance);
     }
 }
+let currentInstance = null;
+const setCurrentInstance = instance => (currentInstance = instance);
+// 在setup中获取当前实例
+const getCurrentInstance = () => currentInstance;
 function setupStatefulComponent(instance) {
     // 1.代理 传递给render函数的参数
     instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers);
@@ -269,9 +273,11 @@ function setupStatefulComponent(instance) {
     const { setup } = Component;
     // ------ 有setup -------
     if (setup) {
+        currentInstance = instance;
         const setupContext = createSetupContent(instance);
         //  setup传入的setupContext和instance不是一个东西，instance里面包含的内容会提取一些传递给context
         const setupResult = setup(instance.props, setupContext); // instance中props attrs slots emit expose会被提取出来，因为开发过程中会用这些属性
+        currentInstance = null;
         handleSetupResult(instance, setupResult);
     }
     else {
@@ -751,6 +757,34 @@ function getSequence(arr) {
     return result;
 }
 
+const injectHook = (type, hook, target) => {
+    if (!target) {
+        return console.warn('injection APIs can only be used during execution of setup()');
+    }
+    const hooks = target[type] || (target[type] = []);
+    const wrap = () => {
+        setCurrentInstance(target);
+        hook.call(target);
+        setCurrentInstance(null);
+    };
+    hooks.push(wrap);
+};
+// 给当前实例增加对应生命周期
+const createHook = lifecycle => (hook, target = currentInstance // 当前实例
+) => {
+    injectHook(lifecycle, hook, target);
+};
+// 调用钩子函数
+const invokeArrayFns = fns => {
+    for (let i = 0; i < fns.length; i++) {
+        fns[i]();
+    }
+};
+const onBeforeMount = createHook("bm" /* LifeCycleHooks.BEFORE_MOUNT */);
+const onMounted = createHook("m" /* LifeCycleHooks.MOUNTED */);
+const onBeforeUpdate = createHook("bu" /* LifeCycleHooks.BEFORE_UPDATE */);
+const onUpdated = createHook("u" /* LifeCycleHooks.UPDATED */);
+
 // 告诉core怎么渲染
 // createRenderer 创建渲染器
 function createRenderer(rendererOptions) {
@@ -761,6 +795,11 @@ function createRenderer(rendererOptions) {
         // 每个组件都会有一个effect，vue3是组件级更新，数据变化会重新执行对应组件的effect
         instance.update = effect(function componentEffect() {
             if (!instance.isMounted) {
+                const { bm, m } = instance;
+                // beforemounted
+                if (bm) {
+                    invokeArrayFns(bm);
+                }
                 // 没有被挂载，初次渲染
                 const proxyToUse = instance.proxy;
                 // 虚拟节点  渲染内容
@@ -770,18 +809,29 @@ function createRenderer(rendererOptions) {
                 // 用render函数的返回值继续渲染
                 patch(null, subTree, container);
                 instance.isMounted = true;
+                // mounted必须子组件完成后才会调用自己
+                if (m) {
+                    invokeArrayFns(m);
+                }
             }
             else {
                 // 更新逻辑
                 // 不能每次数据变更就执行，需要降低频率，以最后一次数据变更为准
                 // 通过scheduler自定义更新策略，维护一个队列，进行去重
                 // diff算法（核心 diff + 序列优化 + watchApi + 生命周期）
+                const { bu, u } = instance;
+                if (bu) {
+                    invokeArrayFns(bu);
+                }
                 // 上一次生成的树
                 const prevTree = instance.subTree;
                 const proxyToUse = instance.proxy;
                 // 新树
                 const nextTree = instance.render.call(proxyToUse, proxyToUse);
                 patch(prevTree, nextTree, container);
+                if (u) {
+                    invokeArrayFns(u);
+                }
             }
         }, {
             // 更新实际走的
@@ -1106,6 +1156,14 @@ function createRenderer(rendererOptions) {
 // 拿到render方法返回的结果  再次走渲染流程 -》 patch
 // 组件渲染顺序 先父后子
 // 每个组件都是一个effect
+// ——————————————————————————————
+// 组件更新流程
+// 父传子属性，子是否要更新？ 更新一次   内部会把子组件自身的更新移除掉
+// 子组件使用了属性，属性变化要不要更新？ 更新一次
+// 流程：
+// 父组件先更新状态 -> 产生一个新的虚拟节点 -> 走diff流程
+// 如果遇到的是组件，属性是动态的，会比较两个组件，如果属性不一样要更新组件
+// 组件需要更新自己身上的属性，并且重新生产子树
 
 // render函数参数的情况，做兼容处理
 // h('div', {})
@@ -1160,5 +1218,5 @@ function createApp(rootComponent, rootProps = null) {
 // 用户调用的是runtime-dom -> runtime-core
 // runtime-dom是为了解决平台差异（浏览器）
 
-export { computed, createApp, createRenderer, effect, h, reactive, readonly, ref, shallowReactive, shallowReadonly, shallowRef, toRef, toRefs };
+export { computed, createApp, createRenderer, effect, getCurrentInstance, h, onBeforeMount, onBeforeUpdate, onMounted, onUpdated, reactive, readonly, ref, shallowReactive, shallowReadonly, shallowRef, toRef, toRefs };
 //# sourceMappingURL=runtime-dom.esm-bundler.js.map
